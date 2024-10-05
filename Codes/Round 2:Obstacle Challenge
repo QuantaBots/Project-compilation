@@ -1,0 +1,286 @@
+//Sample Test for left inner wall only
+
+
+#include <Servo.h>
+
+Servo steering;
+
+int centre_pos = 110;
+int left_pos = 80;
+int right_pos = 140;
+
+int max_TOF_Range = 1500;
+
+//--------Pin definitions for the TB6612FNG Motor Driver----
+#define AIN1 4
+#define AIN2 3
+#define PWMA 5
+//------------------------------------------------------------
+
+
+
+#include "Adafruit_VL53L0X.h"
+
+// address we will assign if dual sensor is present
+#define LOX1_ADDRESS 0x30
+#define LOX2_ADDRESS 0x31
+
+// set the pins to shutdown
+#define SHT_LOX1 7
+#define SHT_LOX2 8
+
+// objects for the vl53l0x
+Adafruit_VL53L0X lox1 = Adafruit_VL53L0X();
+Adafruit_VL53L0X lox2 = Adafruit_VL53L0X();
+
+// this holds the measurement
+VL53L0X_RangingMeasurementData_t measure1;
+VL53L0X_RangingMeasurementData_t measure2;
+
+int leftDistance;
+int rightDistance;
+int offset = 0;
+
+int leftrun = 0;
+int rightrun = 0;
+int flag = 0;
+
+
+
+int P, D, I, previousError, PIDvalue;
+double error;
+
+float Kp = 0.1;
+float Kd = 0.5;
+float Ki = 0;
+
+int drivespeed = 100;
+int turnError;
+int turn_duration=800;
+unsigned long prevMillis = 0;
+
+/*
+    Reset all sensors by setting all of their XSHUT pins low for delay(10), then set all XSHUT high to bring out of reset
+    Keep sensor #1 awake by keeping XSHUT pin high
+    Put all other sensors into shutdown by pulling XSHUT pins low
+    Initialize sensor #1 with lox.begin(new_i2c_address) Pick any number but 0x29 and it must be under 0x7F. Going with 0x30 to 0x3F is probably OK.
+    Keep sensor #1 awake, and now bring sensor #2 out of reset by setting its XSHUT pin high.
+    Initialize sensor #2 with lox.begin(new_i2c_address) Pick any number but 0x29 and whatever you set the first sensor to
+ */
+void setID() {
+  // all reset
+  digitalWrite(SHT_LOX1, LOW);
+  digitalWrite(SHT_LOX2, LOW);
+  delay(10);
+  // all unreset
+  digitalWrite(SHT_LOX1, HIGH);
+  digitalWrite(SHT_LOX2, HIGH);
+  delay(10);
+
+  // activating LOX1 and resetting LOX2
+  digitalWrite(SHT_LOX1, HIGH);
+  digitalWrite(SHT_LOX2, LOW);
+
+  // initing LOX1
+  if (!lox1.begin(LOX1_ADDRESS)) {
+    //Serial.println(F("Failed to boot first VL53L0X"));
+    while (1)
+      ;
+  }
+  delay(10);
+
+  // activating LOX2
+  digitalWrite(SHT_LOX2, HIGH);
+  delay(10);
+
+  //initing LOX2
+  if (!lox2.begin(LOX2_ADDRESS)) {
+    //Serial.println(F("Failed to boot second VL53L0X"));
+    while (1)
+      ;
+  }
+}
+
+void read_dual_sensors() {
+
+  lox1.rangingTest(&measure1, false);  // pass in 'true' to get debug data printout!
+  lox2.rangingTest(&measure2, false);  // pass in 'true' to get debug data printout!
+
+  if (measure1.RangeStatus != 4) {
+    leftDistance = measure1.RangeMilliMeter;
+  } else {
+
+    leftDistance = max_TOF_Range;
+  }
+
+  if (leftDistance > max_TOF_Range) {
+    leftDistance = max_TOF_Range;
+  }
+
+  if (measure2.RangeStatus != 4) {
+    rightDistance = measure2.RangeMilliMeter;
+  } else {
+    rightDistance = max_TOF_Range;
+  }
+  if (rightDistance > max_TOF_Range) {
+    rightDistance = max_TOF_Range;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(PWMA, OUTPUT);
+  pinMode(2, INPUT_PULLUP);  //Pushbutton
+
+  pinMode(14, OUTPUT);
+  pinMode(15, OUTPUT);
+  pinMode(16, OUTPUT);
+
+
+  steering.attach(9);
+
+  // while (digitalRead(2)) {}
+
+
+  // wait until serial port opens for native USB devices
+  while (!Serial) { delay(1); }
+
+  pinMode(SHT_LOX1, OUTPUT);
+  pinMode(SHT_LOX2, OUTPUT);
+
+  Serial.println(F("Shutdown pins inited..."));
+
+  digitalWrite(SHT_LOX1, LOW);
+  digitalWrite(SHT_LOX2, LOW);
+
+  Serial.println(F("Both in reset mode...(pins are low)"));
+
+
+  Serial.println(F("Starting..."));
+  setID();
+
+  steering.write(centre_pos);
+  delay(500);
+}
+
+void loop() {
+  while (digitalRead(2)) {}
+  delay(500);
+  while (1) {
+
+    read_dual_sensors();
+    delay(5);
+    Serial.print("leftDistance");
+    Serial.print(leftDistance);
+    Serial.print("  ");
+
+    Serial.print("rightDistance");
+    Serial.print(rightDistance);
+    Serial.println("  ");
+    //drive();
+    if (leftDistance < 1000 && rightDistance < 1000) {
+      drive();
+      lightoff();
+    }
+
+    else if (leftDistance > 1000 && rightDistance < 1000) {
+      steering.write(left_pos);
+      motor1run(drivespeed);
+      red();
+    } else if (rightDistance > 1000 && leftDistance < 1000) {
+      steering.write(right_pos);
+      motor1run(drivespeed);
+      green();
+    } else if (leftDistance > 1000 && rightDistance > 1000) {
+      //delay(10);
+      blue();
+    }
+  }
+
+  int sensorValue = analogRead(A3);
+  if (sensorValue > 900 && sensorValue < 950) {
+    red();
+    steering.write(right_pos);
+    delay(turn_duration);
+  } else if (sensorValue > 700 && sensorValue < 750) {
+    green();
+    steering.write(left_pos);
+    delay(turn_duration);
+  } else {
+    lightoff();
+  }
+}
+
+void drive() {
+  motor1run(drivespeed);
+
+  error = leftDistance - rightDistance + offset;
+
+  P = error;
+  I = I + error;
+  D = error - previousError;
+
+  PIDvalue = (Kp * P) + (Ki * I) + (Kd * D);
+  previousError = error;
+
+  int steerAngle = centre_pos - PIDvalue;
+
+
+  // int steerAngle = 95 - 0.4 * (leftDistance - 300);
+  turnError = abs(steerAngle) - centre_pos;
+
+  steerAngle = constrain(steerAngle, 95, 125);
+  Serial.println(steerAngle);
+  steering.write(steerAngle);
+}
+
+
+//--------Function to run Motor 1-----------------
+void motor1run(int motorSpeed) {
+  motorSpeed = constrain(motorSpeed, -255, 255);
+  if (motorSpeed > 0) {
+    digitalWrite(AIN1, 1);
+    digitalWrite(AIN2, 0);
+    analogWrite(PWMA, motorSpeed);
+  } else if (motorSpeed < 0) {
+    digitalWrite(AIN1, 0);
+    digitalWrite(AIN2, 1);
+    analogWrite(PWMA, abs(motorSpeed));
+  } else {
+    digitalWrite(AIN1, 1);
+    digitalWrite(AIN2, 1);
+    analogWrite(PWMA, 0);
+  }
+}
+
+void red() {
+  digitalWrite(14, HIGH);
+  digitalWrite(15, LOW);
+  digitalWrite(16, LOW);
+}
+
+void green() {
+  digitalWrite(14, LOW);
+  digitalWrite(15, HIGH);
+  digitalWrite(16, LOW);
+}
+
+void blue() {
+  digitalWrite(14, LOW);
+  digitalWrite(15, LOW);
+  digitalWrite(16, HIGH);
+}
+void cyan() {
+  digitalWrite(14, LOW);
+  digitalWrite(15, HIGH);
+  digitalWrite(16, HIGH);
+}
+
+void lightoff() {
+  digitalWrite(14, LOW);
+  digitalWrite(15, LOW);
+  digitalWrite(16, LOW);
+}
